@@ -1,10 +1,17 @@
 """
-OpenTelemetry 설정: 트레이스/메트릭/로그 → OTLP(Alloy), LangChain 자동 계측.
+OpenTelemetry 설정: 트레이스/메트릭/로그 → OTLP(Alloy), LangChain + FastAPI 자동 계측.
 
 커스텀 스팬은 만들지 않습니다. 수집되는 것:
-  - 트레이스 : LangChain 실행이 남기는 스팬 (LangchainInstrumentor 자동 계측)
+  - 트레이스 : LangChain 실행 스팬(LangchainInstrumentor) + FastAPI HTTP 스팬(FastAPIInstrumentor)
   - 메트릭  : Alloy spanmetrics가 트레이스에서 파생 생성 (langchain_calls_total 등)
   - 로그    : Python logging → OTLP (trace_id/span_id 자동 첨부)
+
+Env (docker-compose의 ai-service.environment에 선언):
+  OTEL_EXPORTER_OTLP_ENDPOINT  Alloy OTLP gRPC 주소 (기본 http://localhost:4317)
+  OTEL_SERVICE_NAME            리소스 service.name (기본 ai-service)
+  OTEL_RESOURCE_ATTRIBUTES     추가 리소스 속성 "k1=v1,k2=v2" — SDK 표준 규칙대로 병합
+  TRACELOOP_TRACE_CONTENT      OpenLLMetry의 프롬프트/응답 콘텐츠 캡처 여부 (기본 true;
+                               인스트루먼터가 직접 읽으므로 코드에서 참조하지 않음)
 """
 import logging
 import os
@@ -32,16 +39,25 @@ SERVICE_NAME = os.environ.get("OTEL_SERVICE_NAME", "ai-service")
 _providers: dict[str, object] = {}
 
 
+def _resource() -> Resource:
+    attrs = {
+        "service.name": SERVICE_NAME,
+        "service.instance.id": f"{SERVICE_NAME}-{uuid.uuid4().hex[:8]}",
+        "service.version": "0.1.0",
+        "deployment.environment": "dev",
+    }
+    # OTEL_RESOURCE_ATTRIBUTES="k1=v1,k2=v2" 병합 (SDK 표준 env 규칙)
+    for pair in os.environ.get("OTEL_RESOURCE_ATTRIBUTES", "").split(","):
+        if "=" in pair:
+            key, value = pair.split("=", 1)
+            if key.strip() and value.strip():
+                attrs[key.strip()] = value.strip()
+    return Resource.create(attrs)
+
+
 def setup_otel() -> None:
     """전역 Tracer/Meter/LoggerProvider 구성 + LangChain 자동 계측 활성화."""
-    resource = Resource.create(
-        {
-            "service.name": SERVICE_NAME,
-            "service.instance.id": f"{SERVICE_NAME}-{uuid.uuid4().hex[:8]}",
-            "service.version": "0.1.0",
-            "deployment.environment": "dev",
-        }
-    )
+    resource = _resource()
 
     # 트레이스
     tracer_provider = TracerProvider(resource=resource)

@@ -12,7 +12,9 @@ SSE 이벤트:
   event: error     {message}
   event: done      {thread_id, run_id, content}   — 완성된 전체 답변
 
-트레이스: 커스텀 스팬 없음. LangChain 자동 계측(LangchainInstrumentor)만 사용.
+트레이스: 커스텀 스팬 없음. LangChain(LangchainInstrumentor) + FastAPI HTTP(FastAPIInstrumentor)
+자동 계측만 사용합니다. instrument_app이 POST /chat/stream 요청 하나를 루트 스팬으로 만들고
+그 아래에 LangChain 실행 스팬들이 중첩됩니다.
 """
 import json
 import logging
@@ -29,6 +31,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.store.sqlite.aio import AsyncSqliteStore
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 from agent import build_agent, build_model
 from schemas import ChatRequest
@@ -72,6 +75,9 @@ app = FastAPI(title="ai-service", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
 )
+# FastAPI HTTP 레이어 계측: 요청 1건 → HTTP 루트 스팬, 내부 LangChain 스팬과 부모-자식 연결.
+# setup_otel() 이후에 호출해야 TracerProvider가 이미 설정된 상태가 됩니다.
+FastAPIInstrumentor().instrument_app(app)
 
 
 @app.get("/health")

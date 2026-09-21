@@ -13,7 +13,7 @@ WSL2 환경에서 **LangChain AI 서비스의 실행을 관찰**하기 위한 �
  │ (채팅 UI)│   fetch/   │ (LangChain │  ChatOpenAI│(OpenAI 호환  │  이후    │  OpenAI/  │
  │ SQLite DB│   SSE      │  create_agent)│ ─────►  │  가상 서버)   │  교체    │  vLLM)    │
  └────┬─────┘            └─────┬──────┘           └──────────────┘          └──────────┘
-     │ SQLite환경설정/대화       │ OTel SDK (트레이스/로그) + OTLP gRPC:4317
+     │ SQLite환경설정/대화       │ OTel SDK (트레이스/로그, FastAPI+LangChain 계측) + OTLP gRPC:4317
      └──────────────────────────▼──────────────────────────────────────────────┐
                          ┌────────────────────────────────────────────┐        │
                          │              Grafana Alloy                 │        │
@@ -27,7 +27,7 @@ WSL2 환경에서 **LangChain AI 서비스의 실행을 관찰**하기 위한 �
 
 - **frontend → ai-service**: 브라우저는 frontend만 호출합니다. `POST /api/chat`이 ai-service의 `POST /chat/stream`(SSE)을 릴레이합니다. (CORS 불필요)
 - **ai-service(관찰 대상)**: `langchain.agents.create_agent`를 기본 설정 그대로 사용 (tools=[], middleware 없음). OpenAI 호환 `ChatOpenAI`만 지원. 채팅 히스토리/메모리 store는 **SQLite**.
-- **ai-service → Alloy**: **커스텀 스팬 없이** `LangchainInstrumentor`(OpenLLMetry) 자동 계측 트레이스 + Python 로그를 OTel로 전송. 메트릭은 Alloy가 트레이스를 보고 파생 생성하는 spanmetrics(`langchain_calls_total` 등).
+- **ai-service → Alloy**: **커스텀 스팬 없이** `LangchainInstrumentor`(OpenLLMetry, LangChain 실행)와 `FastAPIInstrumentor`(HTTP 요청 레이어) 자동 계측 + Python 로그를 OTel로 전송. 메트릭은 Alloy가 트레이스를 보고 파생 생성하는 spanmetrics(`langchain_calls_total` 등). 계측/수집기 설정은 env로 제어(§ ai-service 텔레메트리 env 참고).
 - **Alloy → 백엔드**: Traces→Tempo, metrics→Prometheus(remote write), logs→Loki(로그에 `traceid`/`spanid` 포함 → 트레이스 상관분석 가능).
 
 ## 구성 요소
@@ -123,8 +123,23 @@ curl -N -X POST http://localhost:8000/chat/stream \
 
 1. **대시보드** — Dashboards → **LangChain Observability** (요청 RPS/오류율/지연, 최근 트레이스 등)
 2. **Explore**
-   - Tempo: `{}` 검색 → 트레이스 선택 → LangChain 자동 계측 스팬들(agent → ChatOpenAI 호출) 확인
+   - Tempo: `{}` 검색 → 트레이스 선택 → 루트 스팬 `POST /chat/stream`(FastAPI 계측) 아래 LangChain 자동 계측 스팬들(agent → ChatOpenAI 호출)이 중첩된 모습 확인
    - Loki: `{service_name="ai-service"}` 로그 질의 → 로그의 traceid로 트레이스 점프
+
+## ai-service 텔레메트리 설정 (env)
+
+`docker-compose.yml`의 `ai-service.environment`에서 제어합니다:
+
+| env | 기본값(코드) | 역할 |
+|---|---|---|
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4317` | Alloy 수집기 주소 (compose에서 `http://alloy:4317`) |
+| `OTEL_SERVICE_NAME` | `ai-service` | 리소스 `service.name` — Tempo/Prometheus/Loki 식별 키 |
+| `OTEL_RESOURCE_ATTRIBUTES` | (없음) | 리소스 추가 속성 `k1=v1,k2=v2` (compose에서 `deployment.environment=dev,service.version=0.1.0`) |
+| `TRACELOOP_TRACE_CONTENT` | `true` | OpenLLMetry(LangChain)가 프롬프트/응답 콘텐츠를 스팬에 캡처할지 — 인스트루먼터가 직접 읽음 |
+
+> 주의: FastAPI HTTP 스팬도 Alloy spanmetrics 커넥터를 통과하므로 `langchain_calls_total`에
+> `gen_ai_operation_name="unknown"`(HTTP 레이어) 시리즈가 추가됩니다. 대시보드는 이름별로
+> 그룹핑하므로 LLM 호출 수는 그대로 보이고, HTTP 레이어는 `unknown` 버킷에 분리 표시됩니다.
 3. **Alloy UI** — http://localhost:12345 에서 컴포넌트 상태/파이프라인 확인
 
 ## 디렉터리 구조
@@ -141,7 +156,7 @@ curl -N -X POST http://localhost:8000/chat/stream \
     ├── ai-service/             # LangChain agent + SSE + OTel(tracing.py)
     │   ├── main.py             #   POST /chat/stream (SSE)
     │   ├── agent.py            #   create_agent + SQLite checkpoint/store
-    │   ├── tracing.py          #   OTel 구성 + LangchainInstrumentor
+    │   ├── tracing.py          #   OTel 구성 + LangchainInstrumentor (env 기반 리소스)
     │   └── schemas.py
     └── frontend/               # 채팅 UI + SQLite DB + SSE 릴레이
         ├── main.py             #   /api/{models,active-model,sessions,chat} + 정적 UI
@@ -166,4 +181,4 @@ make clean       # 완전 삭제 (볼륨 포함)
 
 - Alloy/Loki/Tempo 이미지는 셸 도구가 없는 distroless 기반이라 healthcheck를 넣지 않았습니다.
 - ai-service SQLite 데이터(`checkpoints.sqlite`, `store.sqlite`)와 frontend DB(`frontend.db`)는 named volume(`ai-service-data`, `frontend-data`)에 저장됩니다. `make clean` 시 함께 삭제됩니다.
-- LangChain 쪽 OTel은 `opentelemetry-instrumentation-langchain`(OpenLLMetry)의 `LangchainInstrumentor`를 사용합니다 (LangChain 자체에 내장 OTel은 없음). 자세한 주의사항은 `AGENTS.md` 참고.
+- LangChain 쪽 OTel은 `opentelemetry-instrumentation-langchain`(OpenLLMetry)의 `LangchainInstrumentor`를, HTTP 레이어는 `opentelemetry-instrumentation-fastapi`의 `FastAPIInstrumentor`를 사용합니다 (LangChain 자체에 내장 OTel은 없음). 자세한 주의사항은 `AGENTS.md` 참고.

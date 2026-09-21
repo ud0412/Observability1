@@ -151,15 +151,20 @@ services:
   # ai-service - LangChain agent + SSE 스트리밍 API (프로필 "apps")
   # - langchain.agents.create_agent (tools=[], middleware 없음, OpenAI 호환 모델만)
   # - checkpoint/store 모두 SQLite (ai-service-data 볼륨)
-  # - 트레이스: 커스텀 스팬 없음. LangchainInstrumentor 자동 계측만 OTLP로 전송
+  # - 트레이스: 커스텀 스팬 없음. LangChain(LangchainInstrumentor) + FastAPI(FastAPIInstrumentor)
+  #   자동 계측만 OTLP로 전송. 수집기/계측 설정은 아래 environment(env)로 제어
   # ------------------------------------------------------------------
   ai-service:
     build: ./app/ai-service
     profiles: ["apps"]
     container_name: obs-ai-service
     environment:
+      # --- Alloy 수집기 연결 (OTLP gRPC) ---
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://alloy:4317
       - OTEL_SERVICE_NAME=ai-service
+      - OTEL_RESOURCE_ATTRIBUTES=deployment.environment=dev,service.version=0.1.0
+      # --- LangChain(OpenLLMetry) 자동 계측 ---
+      - TRACELOOP_TRACE_CONTENT=true   # 프로프트/응답 콘텐츠를 스팬에 캡처 (기본값 true)
       - CHECKPOINT_DB=/data/checkpoints.sqlite
       - STORE_DB=/data/store.sqlite
     ports:
