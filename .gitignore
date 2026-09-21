@@ -1,0 +1,13 @@
+# 환경/비밀
+.env
+*.log
+
+# 에디터
+.vscode/
+.idea/
+
+# 파이썬
+__pycache__/
+*.pyc
+.venv/
+venv/

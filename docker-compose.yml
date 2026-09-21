@@ -1,0 +1,148 @@
+# LangChain Observability Stack
+# LangChain 앱의 OTLP 트레이스/메트릭/로그를 Alloy가 수집하고
+# Tempo(traces) / Prometheus(metrics) / Loki(logs)로 분기한 뒤 Grafana에서 조회합니다.
+name: langchain-observability
+
+networks:
+  obs:
+    name: observability
+
+volumes:
+  alloy-data:
+  loki-data:
+  tempo-data:
+  prometheus-data:
+  grafana-data:
+
+services:
+  # ------------------------------------------------------------------
+  # Grafana Alloy - 통합 OTLP 수집기 (앱의 단일 진입점)
+  # LangChain 앱은 http://<alloy-host>:4317 (gRPC) 또는 :4318 (HTTP) 로 전송
+  # ------------------------------------------------------------------
+  alloy:
+    image: grafana/alloy:v1.19.2
+    container_name: obs-alloy
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - --stability.level=public-preview
+      - /etc/alloy/config.alloy
+    ports:
+      - "4317:4317"   # OTLP gRPC 수신 (앱 → Alloy)
+      - "4318:4318"   # OTLP HTTP 수신 (앱 → Alloy)
+      - "12345:12345" # Alloy 웹 UI + /metrics
+    volumes:
+      - ./config/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - alloy-data:/var/lib/alloy/data
+    networks: [obs]
+    restart: unless-stopped
+    mem_limit: 512m
+    # 참고: alloy 이미지는 셸 도구(wget/curl)가 없어 healthcheck 불가.
+    # 데모 앱은 자체적으로 연결을 재시도합니다.
+
+  # ------------------------------------------------------------------
+  # Loki - 로그 저장소 (OTLP 로그를 Alloy가 push)
+  # ------------------------------------------------------------------
+  loki:
+    image: grafana/loki:3.7.8
+    container_name: obs-loki
+    command: ["-config.file=/etc/loki/loki.yaml"]
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./config/loki/loki.yaml:/etc/loki/loki.yaml:ro
+      - loki-data:/loki
+    networks: [obs]
+    restart: unless-stopped
+    mem_limit: 768m
+    # loki 이미지는 distroless(셸 없음)라 healthcheck를 넣지 않습니다.
+
+  # ------------------------------------------------------------------
+  # Tempo - 트레이스 저장소 (OTLP 트레이스를 Alloy가 전달)
+  # 내부망에서만 OTLP 수신(4317/4318), 호스트에는 API(3200)만 노출
+  # ------------------------------------------------------------------
+  tempo:
+    image: grafana/tempo:3.0.3
+    container_name: obs-tempo
+    command: ["-config.file=/etc/tempo.yaml"]
+    ports:
+      - "3200:3200" # Tempo HTTP API (Grafana Datasource용)
+    volumes:
+      - ./config/tempo/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    networks: [obs]
+    restart: unless-stopped
+    mem_limit: 768m
+    # tempo 이미지는 distroless(셸 없음)라 healthcheck를 넣지 않습니다.
+
+  # ------------------------------------------------------------------
+  # Prometheus - 메트릭 저장소
+  # - Alloy의 remote_write 수신 (--web.enable-remote-write-receiver 필수)
+  # - Alloy/Loki/Tempo 자체 메트릭은 scrape
+  # ------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v3.13.3
+    container_name: obs-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-remote-write-receiver
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./config/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    networks: [obs]
+    restart: unless-stopped
+    mem_limit: 512m
+
+  # ------------------------------------------------------------------
+  # Grafana - 대시보드/탐색 UI (Loki, Tempo, Prometheus Datasource 자동 등록)
+  # ------------------------------------------------------------------
+  grafana:
+    image: grafana/grafana:13.2.2
+    container_name: obs-grafana
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./config/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./config/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    networks: [obs]
+    depends_on:
+      - prometheus
+      - loki
+      - tempo
+    restart: unless-stopped
+    mem_limit: 512m
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  # ------------------------------------------------------------------
+  # 데모 앱 (프로필 "demo"로만 실행) - LangChain 흉내 트레이스 생성
+  # 파이프라인 검증용. 이후 실제 LangChain 서비스가 이 자리를 대체합니다.
+  # ------------------------------------------------------------------
+  demo-app:
+    build: ./app/demo
+    profiles: ["demo"]
+    container_name: obs-demo-app
+    environment:
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://alloy:4317
+      - OTEL_SERVICE_NAME=demo-langchain
+      - DEMO_INTERVAL_SECONDS=3
+    depends_on:
+      - alloy
+    networks: [obs]
+    restart: unless-stopped
+    mem_limit: 256m

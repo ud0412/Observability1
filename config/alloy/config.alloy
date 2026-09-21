@@ -1,0 +1,138 @@
+// ============================================================================
+// Grafana Alloy - LangChain Observability Collector
+//
+// LangChain 앱의 모든 텔레메트리는 이 Alloy로 들어옵니다 (단일 진입점).
+//   OTLP(4317 gRPC / 4318 HTTP) 수신
+//     ├─ traces  → Tempo  (otelcol.exporter.otlp)
+//     │            + span → RED 메트릭 자동 생성 (otelcol.connector.spanmetrics)
+//     ├─ metrics → Prometheus (prometheus.remote_write)
+//     └─ logs    → Loki (loki.write)
+//
+// 각 컴포넌트의 output 블록으로 데이터 흐름을 연결합니다.
+// ============================================================================
+
+// ---------------------------------------------------------------------------
+// 1. OTLP Receiver - 앱의 단일 수신점
+// ---------------------------------------------------------------------------
+otelcol.receiver.otlp "default" {
+  grpc {
+    endpoint = "0.0.0.0:4317"
+  }
+  http {
+    endpoint = "0.0.0.0:4318"
+  }
+
+  output {
+    traces  = [otelcol.processor.batch.traces.input]
+    metrics = [otelcol.processor.batch.metrics.input]
+    logs    = [otelcol.processor.batch.logs.input]
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 2. Batch Processor - 네트워크 효율을 위해 묶어서 전송
+// ---------------------------------------------------------------------------
+otelcol.processor.batch "traces" {
+  timeout        = "2s"
+  send_batch_size = 128
+
+  output {
+    traces = [
+      otelcol.exporter.otlp.tempo.input,          // 트레이스 저장
+      otelcol.connector.spanmetrics.default.input, // 트레이스로 RED 메트릭 생성
+    ]
+  }
+}
+
+otelcol.processor.batch "metrics" {
+  timeout        = "2s"
+  send_batch_size = 128
+
+  output {
+    metrics = [otelcol.exporter.prometheus.default.input]
+  }
+}
+
+otelcol.processor.batch "logs" {
+  timeout        = "2s"
+  send_batch_size = 128
+
+  output {
+    logs = [otelcol.exporter.loki.default.input]
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 3. Traces → Tempo
+// ---------------------------------------------------------------------------
+otelcol.exporter.otlp "tempo" {
+  client {
+    endpoint = "tempo:4317"
+    tls {
+      insecure = true
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 4. Traces → R.E.D 메트릭 자동 생성 (spanmetrics connector)
+//    기본 차원: service.name, span.name, span.kind, status.code
+//    여기에 LangChain 관련 차원(gen_ai.*)을 추가
+// ---------------------------------------------------------------------------
+otelcol.connector.spanmetrics "default" {
+  namespace = "langchain" // 생성 메트릭 접두사 → langchain_calls, langchain_latency
+  metrics_flush_interval = "10s" // 기본 60s. 학습용으로 대시보드 반영 주기 단축
+  histogram {
+    unit = "ms"
+    explicit {
+      buckets = ["10ms", "25ms", "50ms", "100ms", "250ms", "500ms", "1s", "2.5s", "5s", "10s"]
+    }
+  }
+  dimension {
+    name    = "gen_ai.operation.name"
+    default = "unknown"
+  }
+  dimension {
+    name    = "gen_ai.request.model"
+    default = "unknown"
+  }
+
+  output {
+    metrics = [otelcol.exporter.prometheus.default.input]
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 5. OTLP Metrics & spanmetrics → Prometheus remote write
+// ---------------------------------------------------------------------------
+otelcol.exporter.prometheus "default" {
+  forward_to = [prometheus.remote_write.prom.receiver]
+}
+
+prometheus.remote_write "prom" {
+  endpoint {
+    url = "http://prometheus:9090/api/v1/write"
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 6. Logs → Loki
+// ---------------------------------------------------------------------------
+otelcol.exporter.loki "default" {
+  forward_to = [loki.write.loki.receiver]
+}
+
+loki.write "loki" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 7. Alloy 자체 메트릭을 Prometheus로 scrape (인프라 상태 모니터링용)
+// ---------------------------------------------------------------------------
+prometheus.scrape "alloy_self" {
+  targets         = [{"__address__" = "localhost:12345"}]
+  scrape_interval = "15s"
+  forward_to      = [prometheus.remote_write.prom.receiver]
+}

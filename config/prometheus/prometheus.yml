@@ -1,0 +1,27 @@
+# Prometheus - 자기 자신과 인프라 컴포넌트 scrape
+# 앱 메트릭은 Alloy의 remote_write로 유입됩니다 (구성 불필요).
+global:
+  scrape_interval: 10s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: alloy
+    static_configs:
+      - targets: ["alloy:12345"]
+
+  - job_name: prometheus
+    static_configs:
+      - targets: ["prometheus:9090"]
+
+  - job_name: loki
+    static_configs:
+      - targets: ["loki:3100"]
+
+  - job_name: tempo
+    static_configs:
+      - targets: ["tempo:3200"]
+
+  # 이후 LangChain 서비스가 Prometheus 형식 /metrics 를 노출하면 아래에 추가:
+  # - job_name: langchain-app
+  #   static_configs:
+  #     - targets: ["langchain-app:8000"]

@@ -1,0 +1,14 @@
+# Grafana 대시보드 자동 등록
+# config/grafana/dashboards/*.json 을 30초마다 감시하여 로드/업데이트
+apiVersion: 1
+
+providers:
+  - name: default
+    orgId: 1
+    folder: ''
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards
