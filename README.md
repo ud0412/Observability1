@@ -54,7 +54,7 @@ make up
 # 2. 앱 3종 빌드 + 실행 (mock-llm + ai-service + frontend)
 make app-up
 
-# 3. 채팅 열기 → http://localhost:8080  (모델 설정 버튼에서 base_url/model 변경 가능)
+# 3. 채팅 열기 → http://localhost:8080  (⚙ 모델 설정에서 모델 추가/선택 가능)
 #    Grafana → http://localhost:3000   (admin/admin, 익명 조회 가능)
 ```
 
@@ -62,7 +62,7 @@ make app-up
 
 ## 채팅/스트리밍 동작
 
-1. 브라우저가 `POST /api/chat` 호출 → frontend가 SQLite에서 모델 설정을 꺼내 ai-service에 전달
+1. 브라우저가 `POST /api/chat` 호출 → frontend가 SQLite의 **활성 모델 설정**을 꺼내 ai-service에 전달
 2. ai-service가 `ChatOpenAI(base_url, api_key, model, temperature, ...)` 생성 → `create_agent(model, tools=[], system_prompt, checkpointer=SQLite, store=SQLite)`
 3. `agent.astream(..., stream_mode=["messages", "updates"])` — **messages(토큰 청크)** 와 **updates(노드 상태)** 둘 다 SSE로 전달
 4. frontend가 SSE를 브라우저로 재전송 → 답변이 실시간으로 표시되고, 완료 시 SQLite에 저장
@@ -72,12 +72,19 @@ SSE 이벤트 (ai-service → frontend → 브라우저):
 
 대화 세션마다 `thread_id`(=세션 id)가 SQLite checkpoint 키가 되어 **이전 대화 맥락을 기억**합니다.
 
-## 모델 설정 변경
+## 모델 설정 (여러 개 저장 + 활성 선택)
 
-frontend 좌측 하단 **⚙ 모델 설정**에서 변경 (SQLite에 저장):
+frontend 좌측 하단 **⚙ 모델 설정**에서 **여러 모델을 추가/수정/삭제**하고 **활성 모델을 선택**할 수 있습니다 (모두 SQLite `models` 테이블에 저장).
+
+- 위쪽 드롭다운에서 저장된 모델을 고르면 **즉시 활성 모델로 전환**되고 해당 설정이 폼에 표시됩니다.
+- **+ 새 모델** → 빈 폼으로 작성 후 저장하면 새로 추가되며 자동으로 활성 모델이 됩니다.
+- **삭제** → 선택한 모델을 제거합니다. 활성이었다면 남은 첫 번째 모델이 활성으로 전환됩니다.
+
+각 모델의 항목:
 
 | 항목 | 기본값 | 설명 |
 |---|---|---|
+| 모델 이름 | `기본 모델` | 목록에 표시되는 이름 (중복 불가) |
 | Base URL | `http://mock-llm:8100/v1` | OpenAI 호환 엔드포인트 |
 | API Key | `mock-key` | mock 서버는 아무 값 허용 |
 | Model | `mock-gpt-4o` | mock-llm의 `/v1/models` 목록 |
@@ -85,7 +92,7 @@ frontend 좌측 하단 **⚙ 모델 설정**에서 변경 (SQLite에 저장):
 | Max Tokens | (비움=기본) | |
 | System Prompt | `You are a helpful assistant.` | |
 
-**실제 OpenAI/vLLM 전환**: Base URL을 `https://api.openai.com/v1`(또는 vLLM 서버), API Key/Model을 실제 값으로 바꾸면 됩니다. mock-llm 없이도 동작합니다.
+**실제 OpenAI/vLLM 전환**: 모델을 하나 추가해 Base URL을 `https://api.openai.com/v1`(또는 vLLM 서버), API Key/Model을 실제 값으로 넣고 활성으로 선택하면 됩니다. mock-llm 없이도 동작하며, 기존 설정(구버전 단일 setting)은 첫 실행 시 `기본 모델`로 자동 마이그레이션됩니다.
 
 ## mock-llm (가상 OpenAI 호환 서버)
 
@@ -137,7 +144,7 @@ curl -N -X POST http://localhost:8000/chat/stream \
     │   ├── tracing.py          #   OTel 구성 + LangchainInstrumentor
     │   └── schemas.py
     └── frontend/               # 채팅 UI + SQLite DB + SSE 릴레이
-        ├── main.py             #   /api/{settings,sessions,chat} + 정적 UI
+        ├── main.py             #   /api/{models,active-model,sessions,chat} + 정적 UI
         ├── db.py               #   SQLite (설정/세션/메시지)
         └── static/             #   index.html / app.js / style.css
 ```

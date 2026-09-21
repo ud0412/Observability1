@@ -46,9 +46,9 @@ reference app to observe:
 
 ## Data flow (why things are where they are)
 
-- Browser → frontend :8080 (`POST /api/chat`, SSE relay) → ai-service :8000 (`/chat/stream`) → ChatOpenAI → mock-llm :8100 (`/v1/chat/completions`). Real model = same path, different base_url/api_key/model in frontend settings (stored in SQLite).
+- Browser → frontend :8080 (`POST /api/chat`, SSE relay) → ai-service :8000 (`/chat/stream`) → ChatOpenAI → mock-llm :8100 (`/v1/chat/completions`). Real model = same path; store multiple model configs in frontend (`models` table) and pick the active one (`settings.active_model`).
 - ai-service → Alloy OTLP gRPC :4317 (traces via LangchainInstrumentor + logs via LoggingHandler); metrics are derived by Alloy's spanmetrics connector, not emitted by the app.
 - Ports: Grafana 3000, Prometheus 9090, Loki 3100, Tempo 3200, Alloy 4317/4318/12345, ai-service 8000, frontend 8080, mock-llm 8100.
-- SQLite: ai-service checkpoints/store in volume `ai-service-data` (`/data/checkpoints.sqlite`, `/data/store.sqlite`); frontend settings/sessions/messages in `frontend-data` (`/data/frontend.db`).
+- SQLite: ai-service checkpoints/store in volume `ai-service-data` (`/data/checkpoints.sqlite`, `/data/store.sqlite`); frontend models/settings/sessions/messages in `frontend-data` (`/data/frontend.db`).
 - Visit `metrics`/`traces` Makefile targets before debugging "no data" — they confirm ingestion end to end.
 - Images are pinned; Tempo 3.x and Alloy 1.19 both had breaking config changes. Before bumping versions, re-verify against the official docker-compose examples.

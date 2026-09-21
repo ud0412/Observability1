@@ -3,6 +3,7 @@
 // ---------- 상태 ----------
 const state = {
   sessions: [],
+  models: [],
   activeSessionId: null,
   streaming: false,
 };
@@ -89,20 +90,84 @@ function appendStoredMessage(role, content) {
   messagesEl.appendChild(div);
 }
 
-// ---------- 모델 설정 ----------
+// ---------- 모델 설정 (다중 모델 관리) ----------
+let editingModelId = null; // null = 새 모델 작성 모드
+
+async function loadModels() {
+  state.models = await api("/api/models");
+  return state.models;
+}
+
+async function updateModelBadge() {
+  const models = await loadModels();
+  const active = models.find((m) => m.is_active) || models[0];
+  modelBadgeEl.textContent = active ? `${active.name} · ${active.model}` : "모델 미설정";
+}
+
+function fillForm(m) {
+  $("set-name").value = m?.name ?? "";
+  $("set-base-url").value = m?.base_url ?? "";
+  $("set-api-key").value = m?.api_key ?? "";
+  $("set-model").value = m?.model ?? "";
+  $("set-temperature").value = m?.temperature ?? 0.7;
+  $("set-max-tokens").value = m?.max_tokens ?? "";
+  $("set-system-prompt").value = m?.system_prompt ?? "";
+}
+
+function renderModelSelect(selectId) {
+  const sel = $("model-select");
+  sel.innerHTML = "";
+  if (state.models.length === 0) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "(저장된 모델 없음)";
+    sel.appendChild(opt);
+    return;
+  }
+  for (const m of state.models) {
+    const opt = document.createElement("option");
+    opt.value = m.id;
+    opt.textContent = m.name;
+    sel.appendChild(opt);
+  }
+  sel.value = selectId ?? "";
+}
+
 async function openSettings() {
-  const s = await api("/api/settings");
-  $("set-base-url").value = s.base_url || "";
-  $("set-api-key").value = s.api_key || "";
-  $("set-model").value = s.model || "";
-  $("set-temperature").value = s.temperature ?? 0.7;
-  $("set-max-tokens").value = s.max_tokens ?? "";
-  $("set-system-prompt").value = s.system_prompt || "";
+  await loadModels();
+  const active = state.models.find((m) => m.is_active);
+  const target = active || state.models[0];
+  renderModelSelect(target?.id ?? "");
+  if (target) {
+    editingModelId = target.id;
+    fillForm(target);
+  } else {
+    editingModelId = null;
+    fillForm(null);
+  }
   settingsModal.classList.remove("hidden");
+}
+
+async function selectModelById(id) {
+  const m = state.models.find((x) => x.id == id);
+  if (!m) return;
+  editingModelId = m.id;
+  fillForm(m);
+  // 선택 즉시 활성 모델로 전환
+  await api("/api/active-model", { method: "PUT", body: JSON.stringify({ model_id: m.id }) });
+  await updateModelBadge();
+}
+
+function startNewModel() {
+  editingModelId = null;
+  fillForm(null);
+  renderModelSelect("");
+  $("set-name").focus();
 }
 
 async function saveSettings() {
   const body = {
+    name: $("set-name").value.trim(),
     base_url: $("set-base-url").value.trim(),
     api_key: $("set-api-key").value.trim(),
     model: $("set-model").value.trim(),
@@ -110,14 +175,23 @@ async function saveSettings() {
     max_tokens: $("set-max-tokens").value ? parseInt($("set-max-tokens").value, 10) : null,
     system_prompt: $("set-system-prompt").value,
   };
-  await api("/api/settings", { method: "PUT", body: JSON.stringify(body) });
+  if (!body.name) body.name = body.model || "모델"; // 이름 미입력 시 model 값 사용
+  if (editingModelId) {
+    await api(`/api/models/${editingModelId}`, { method: "PUT", body: JSON.stringify(body) });
+  } else {
+    await api("/api/models", { method: "POST", body: JSON.stringify(body) }); // 생성 시 자동 활성화
+  }
   settingsModal.classList.add("hidden");
   await updateModelBadge();
 }
 
-async function updateModelBadge() {
-  const s = await api("/api/settings");
-  modelBadgeEl.textContent = `${s.model} @ ${s.base_url}`;
+async function deleteSelectedModel() {
+  if (editingModelId === null) return;
+  const name = state.models.find((x) => x.id == editingModelId)?.name || "";
+  if (!confirm(`'${name}' 모델을 삭제할까요?`)) return;
+  await api(`/api/models/${editingModelId}`, { method: "DELETE" });
+  await openSettings();
+  await updateModelBadge();
 }
 
 // ---------- SSE 파싱 (fetch ReadableStream) ----------
@@ -257,6 +331,11 @@ $("new-session-btn").onclick = newSession;
 $("settings-btn").onclick = openSettings;
 $("settings-cancel").onclick = () => settingsModal.classList.add("hidden");
 $("settings-save").onclick = saveSettings;
+$("model-add-btn").onclick = startNewModel;
+$("model-del-btn").onclick = deleteSelectedModel;
+$("model-select").onchange = (e) => {
+  if (e.target.value !== "") selectModelById(e.target.value);
+};
 settingsModal.addEventListener("click", (e) => {
   if (e.target === settingsModal) settingsModal.classList.add("hidden");
 });

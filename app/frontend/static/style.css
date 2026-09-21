@@ -138,7 +138,22 @@ body {
 .btn:hover { border-color: var(--accent); }
 .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
 .btn.small { padding: 4px 9px; }
+.btn.danger:hover { border-color: #a04040; color: #ffb3b3; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* 모델 설정: 드롭다운 행 */
+.model-row { display: flex; gap: 8px; align-items: center; }
+.model-row select {
+  flex: 1;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 13px;
+  outline: none;
+}
+.model-row select:focus { border-color: var(--accent); }
 
 /* ---------- modal ---------- */
 .modal {
