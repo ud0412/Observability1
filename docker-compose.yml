@@ -13,6 +13,8 @@ volumes:
   tempo-data:
   prometheus-data:
   grafana-data:
+  ai-service-data:
+  frontend-data:
 
 services:
   # ------------------------------------------------------------------
@@ -39,7 +41,7 @@ services:
     restart: unless-stopped
     mem_limit: 512m
     # 참고: alloy 이미지는 셸 도구(wget/curl)가 없어 healthcheck 불가.
-    # 데모 앱은 자체적으로 연결을 재시도합니다.
+    # 애플리케이션은 request 시점에 연결하므로 대기 로직이 필요 없습니다.
 
   # ------------------------------------------------------------------
   # Loki - 로그 저장소 (OTLP 로그를 Alloy가 push)
@@ -130,19 +132,64 @@ services:
       start_period: 30s
 
   # ------------------------------------------------------------------
-  # 데모 앱 (프로필 "demo"로만 실행) - LangChain 흉내 트레이스 생성
-  # 파이프라인 검증용. 이후 실제 LangChain 서비스가 이 자리를 대체합니다.
+  # mock-llm - OpenAI 호환 API를 흉내내는 가상 LLM (프로필 "apps")
+  # 실제 OpenAI/vLLM을 연결하기 전 테스트용. ai-service의 ChatOpenAI 대상.
   # ------------------------------------------------------------------
-  demo-app:
-    build: ./app/demo
-    profiles: ["demo"]
-    container_name: obs-demo-app
+  mock-llm:
+    build: ./app/mock-llm
+    profiles: ["apps"]
+    container_name: obs-mock-llm
+    environment:
+      - MOCK_LLM_STREAM_DELAY=0.04
+    ports:
+      - "8100:8100"
+    networks: [obs]
+    restart: unless-stopped
+    mem_limit: 256m
+
+  # ------------------------------------------------------------------
+  # ai-service - LangChain agent + SSE 스트리밍 API (프로필 "apps")
+  # - langchain.agents.create_agent (tools=[], middleware 없음, OpenAI 호환 모델만)
+  # - checkpoint/store 모두 SQLite (ai-service-data 볼륨)
+  # - 트레이스: 커스텀 스팬 없음. LangchainInstrumentor 자동 계측만 OTLP로 전송
+  # ------------------------------------------------------------------
+  ai-service:
+    build: ./app/ai-service
+    profiles: ["apps"]
+    container_name: obs-ai-service
     environment:
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://alloy:4317
-      - OTEL_SERVICE_NAME=demo-langchain
-      - DEMO_INTERVAL_SECONDS=3
+      - OTEL_SERVICE_NAME=ai-service
+      - CHECKPOINT_DB=/data/checkpoints.sqlite
+      - STORE_DB=/data/store.sqlite
+    ports:
+      - "8000:8000"
+    volumes:
+      - ai-service-data:/data
     depends_on:
       - alloy
+    networks: [obs]
+    restart: unless-stopped
+    mem_limit: 512m
+
+  # ------------------------------------------------------------------
+  # frontend - 채팅 UI + SQLite DB + ai-service SSE 릴레이 (프로필 "apps")
+  # 브라우저는 frontend만 호출(프록시). 모델 설정/대화 내용은 SQLite 저장.
+  # ------------------------------------------------------------------
+  frontend:
+    build: ./app/frontend
+    profiles: ["apps"]
+    container_name: obs-frontend
+    environment:
+      - AI_SERVICE_URL=http://ai-service:8000
+      - FRONTEND_DB=/data/frontend.db
+      - DEFAULT_BASE_URL=http://mock-llm:8100/v1
+    ports:
+      - "8080:8080"
+    volumes:
+      - frontend-data:/data
+    depends_on:
+      - ai-service
     networks: [obs]
     restart: unless-stopped
     mem_limit: 256m

@@ -11,3 +11,9 @@ __pycache__/
 *.pyc
 .venv/
 venv/
+
+# 로컬(비 compose) 실행 시 생성되는 SQLite/데이터
+/data/
+*.sqlite
+*.sqlite3
+*.db

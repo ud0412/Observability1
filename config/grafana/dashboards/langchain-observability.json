@@ -211,13 +211,13 @@
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "editorMode": "code",
-          "expr": "sum(rate(llm_tokens_total[1m])) by (token_type)",
+          "expr": "sum(rate(langchain_calls_total[1m])) by (gen_ai_request_model)",
           "legendFormat": "{{token_type}} tokens/s",
           "range": true,
           "refId": "A"
         }
       ],
-      "title": "LLM 토큰 사용률 (tokens/s)",
+      "title": "모델별 요청 (calls/min)",
       "type": "timeseries"
     },
     {
@@ -259,13 +259,13 @@
         {
           "datasource": { "type": "loki", "uid": "loki" },
           "editorMode": "code",
-          "expr": "sum(count_over_time({service_name=\"demo-langchain\"}[1m]))",
+          "expr": "sum(count_over_time({service_name=\"ai-service\"}[1m]))",
           "legendFormat": "logs/min",
           "queryType": "range",
           "refId": "A"
         }
       ],
-      "title": "로그 볼륨 (demo-langchain, logs/min)",
+      "title": "로그 볼륨 (ai-service, logs/min)",
       "type": "timeseries"
     },
     {
