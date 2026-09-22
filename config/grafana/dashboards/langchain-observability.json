@@ -271,27 +271,83 @@
     {
       "datasource": { "type": "tempo", "uid": "tempo" },
       "fieldConfig": {
-        "defaults": { "mappings": [] },
-        "overrides": []
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "lineWidth": 1,
+            "pointShape": "circle",
+            "pointSize": { "fixed": 7 },
+            "show": "points"
+          },
+          "mappings": []
+        },
+        "overrides": [
+          {
+            "matcher": { "id": "byName", "options": "startTime" },
+            "properties": [{ "id": "unit", "value": "datetime" }]
+          },
+          {
+            "matcher": { "id": "byName", "options": "traceDuration" },
+            "properties": [
+              { "id": "unit", "value": "ms" },
+              { "id": "displayName", "value": "지속시간" },
+              {
+                "id": "custom.scaleDistribution",
+                "value": { "type": "log" }
+              },
+              {
+                "id": "links",
+                "value": [
+                  {
+                    "title": "트레이스 열기 (워터폴·플로우): ${__data.fields.traceID}",
+                    "internal": {
+                      "query": { "query": "${__data.fields.traceID}", "queryType": "traceql" },
+                      "datasourceUid": "tempo",
+                      "datasourceName": "Tempo"
+                    }
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "matcher": { "id": "byName", "options": "nested" },
+            "properties": [
+              {
+                "id": "custom.hideFrom",
+                "value": { "legend": false, "tooltip": true, "viz": true }
+              }
+            ]
+          }
+        ]
       },
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
       "id": 6,
       "options": {
-        "dedupStrategy": "none",
-        "spanType": "span",
-        "spanLabel": "trace_id",
-        "spanBarShow": true
+        "legend": { "calcs": [], "displayMode": "list", "placement": "bottom", "showLegend": false },
+        "mapping": "manual",
+        "series": [
+          {
+            "frame": { "matcher": { "id": "byIndex", "options": 0 } },
+            "name": { "fixed": "트레이스" },
+            "x": { "matcher": { "id": "byName", "options": "startTime" } },
+            "y": { "matcher": { "id": "byName", "options": "traceDuration" } }
+          }
+        ],
+        "tooltip": { "mode": "single", "sort": "desc" }
       },
       "targets": [
         {
           "datasource": { "type": "tempo", "uid": "tempo" },
-          "query": "{}",
+          "limit": 500,
+          "query": "{ resource.service.name = \"ai-service\" }",
           "queryType": "traceql",
-          "refId": "A"
+          "refId": "A",
+          "tableType": "traces"
         }
       ],
-      "title": "최근 트레이스 (Tempo)",
-      "type": "traces"
+      "title": "트레이스 스캐터 (점 클릭 → 워터폴·플로우)",
+      "type": "xy"
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },

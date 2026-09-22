@@ -122,7 +122,8 @@ curl -N -X POST http://localhost:8000/chat/stream \
 
 ## Grafana에서 보는 법
 
-1. **대시보드** — Dashboards → **LangChain Observability** (요청 RPS/오류율/지연, 최근 트레이스 등)
+1. **대시보드** — Dashboards → **LangChain Observability** (요청 RPS/오류율/지연, 트레이스 스캐터, 로그, 인프라 상태)
+   - **트레이스 스캐터 (점 클릭 → 워터폴·플로우)**: x=시작시간, y=지속시간(ms, log 눈금)으로 트레이스가 **점**으로 표시됩니다. 점을 클릭하면 `traceID` 내부 링크(`queryType: traceql`)로 트레이스 상세가 열리고, **워터폴(스팬 바 그래프)** 와 **Flow(서비스 흐름 그래프)** 탭을 볼 수 있습니다.
 2. **Explore**
    - Tempo: `{}` 검색 → 트레이스 선택 → 루트 스팬 `POST /chat/stream`(FastAPI 계측) 아래 LangChain 자동 계측 스팬들(agent → ChatOpenAI 호출)이 중첩된 모습 확인
    - Loki: `{service_name="ai-service"}` 로그 질의 → 로그의 traceid로 트레이스 점프
