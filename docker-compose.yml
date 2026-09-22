@@ -37,6 +37,9 @@ services:
     volumes:
       - ./config/alloy/config.alloy:/etc/alloy/config.alloy:ro
       - alloy-data:/var/lib/alloy/data
+      # loki.source.docker(컨테이너 stdout 로그 수집)용 Docker 소켓.
+      # alloy 컨테이너는 root(uid 0)로 실행되므로 소켓 권한 문제 없음.
+      - /var/run/docker.sock:/var/run/docker.sock
     networks: [obs]
     restart: unless-stopped
     mem_limit: 512m
@@ -44,7 +47,8 @@ services:
     # 애플리케이션은 request 시점에 연결하므로 대기 로직이 필요 없습니다.
 
   # ------------------------------------------------------------------
-  # Loki - 로그 저장소 (OTLP 로그를 Alloy가 push)
+  # Loki - 로그 저장소 (Alloy loki.source.docker가 컨테이너 stdout을 push)
+  #   docker logs <컨테이너> 내용 == Loki 로그 내용 (동일 소스)
   # ------------------------------------------------------------------
   loki:
     image: grafana/loki:3.7.8

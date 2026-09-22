@@ -1,12 +1,16 @@
 // ============================================================================
 // Grafana Alloy - LangChain Observability Collector
 //
-// LangChain 앱의 모든 텔레메트리는 이 Alloy로 들어옵니다 (단일 진입점).
-//   OTLP(4317 gRPC / 4318 HTTP) 수신
+// 트레이스/메트릭은 앱의 OTLP(4317 gRPC / 4318 HTTP)로 들어옵니다.
+//   OTLP 수신
 //     ├─ traces  → Tempo  (otelcol.exporter.otlp)
 //     │            + span → RED 메트릭 자동 생성 (otelcol.connector.spanmetrics)
-//     ├─ metrics → Prometheus (prometheus.remote_write)
-//     └─ logs    → Loki (loki.write)
+//     └─ metrics → Prometheus (prometheus.remote_write)
+//
+// 로그는 OTLP를 쓰지 않습니다. 원칙: "stdout으로 출력되는 것(= docker logs 내용)
+// 그대로 Loki로 수집한다". Alloy는 Docker API로 컨테이너 stdout을 읽습니다
+// (loki.source.docker, 아래 §6). 쿠버네티스에 배포하면 이 컴포넌트만
+// loki.source.kubernetes로 교체하면 kubectl logs 내용이 그대로 Loki로 들어옵니다.
 //
 // 각 컴포넌트의 output 블록으로 데이터 흐름을 연결합니다.
 // ============================================================================
@@ -25,7 +29,6 @@ otelcol.receiver.otlp "default" {
   output {
     traces  = [otelcol.processor.batch.traces.input]
     metrics = [otelcol.processor.batch.metrics.input]
-    logs    = [otelcol.processor.batch.logs.input]
   }
 }
 
@@ -50,15 +53,6 @@ otelcol.processor.batch "metrics" {
 
   output {
     metrics = [otelcol.exporter.prometheus.default.input]
-  }
-}
-
-otelcol.processor.batch "logs" {
-  timeout        = "2s"
-  send_batch_size = 128
-
-  output {
-    logs = [otelcol.exporter.loki.default.input]
   }
 }
 
@@ -116,9 +110,46 @@ prometheus.remote_write "prom" {
 }
 
 // ---------------------------------------------------------------------------
-// 6. Logs → Loki
+// 6. Logs → Loki (컨테이너 stdout 수집)
+//    loki.source.docker = docker logs 와 똑같은 내용을 Docker API로 읽어 Loki로 전송.
+//    쿠버네티스 배포 시 이 컴포넌트를 loki.source.kubernetes로 교체하면
+//    kubectl logs 내용이 동일하게 Loki로 들어옵니다 (파이프라인/라벨 로직은 그대로).
+//    컨테이너명이 obs-* 이므로 service_name 라벨을 obs- 접두사 제거로 만든다
+//    (예: obs-ai-service → service_name="ai-service" — 기존 대시보드 쿼리 유지).
 // ---------------------------------------------------------------------------
-otelcol.exporter.loki "default" {
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+  // 30초마다 신규/종료 컨테이너 재탐색 (앱 프로파일이 나중에 떠도 잡힘)
+  refresh_interval = "30s"
+}
+
+// loki.source.docker는 엔트리에서 __meta_* 라벨을 제거하므로, 여기서 라벨을 만들어야 한다.
+// 방법: discovery.docker → discovery.relabel 체인으로 target 라벨에 service_name 등을 추가하고
+// 그 target들을 loki.source.docker에 전달 (K8s도 동일 패턴: discovery.kubernetes → relabel).
+discovery.relabel "docker_labels" {
+  targets = discovery.docker.containers.targets
+  // 컨테이너명 obs-ai-service → service_name="ai-service" (대시보드 쿼리 라벨)
+  // RE2에는 비캡처 그룹이 없으므로 슬래시는 /? 로, obs- 프리픽스는 캡처 밖으로
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "^/?obs-(.+)$"
+    target_label  = "service_name"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "^/?(.+)$"
+    target_label  = "container_name"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_id"]
+    regex         = "(.+)"
+    target_label  = "container_id"
+  }
+}
+
+loki.source.docker "containers" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.docker_labels.output
   forward_to = [loki.write.loki.receiver]
 }
 

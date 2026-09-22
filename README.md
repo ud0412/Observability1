@@ -13,22 +13,23 @@ WSL2 환경에서 **LangChain AI 서비스의 실행을 관찰**하기 위한 �
  │ (채팅 UI)│   fetch/   │ (LangChain │  ChatOpenAI│(OpenAI 호환  │  이후    │  OpenAI/  │
  │ SQLite DB│   SSE      │  create_agent)│ ─────►  │  가상 서버)   │  교체    │  vLLM)    │
  └────┬─────┘            └─────┬──────┘           └──────────────┘          └──────────┘
-     │ SQLite환경설정/대화       │ OTel SDK (트레이스/로그, FastAPI+LangChain 계측) + OTLP gRPC:4317
+     │ SQLite환경설정/대화       │ OTel SDK (트레이스 — FastAPI+LangChain 계측) + OTLP gRPC:4317
      └──────────────────────────▼──────────────────────────────────────────────┐
                          ┌────────────────────────────────────────────┐        │
                          │              Grafana Alloy                 │        │
-                         │           (통합 OTLP 수집기)                │◄───────┘
+                         │      (OTLP 수신 + 컨테이너 로그 수집)        │◄───────┘
                          │  traces   ──► Tempo   (+spanmetrics R.E.D) │
                          │  metrics  ──► Prometheus (remote_write)    │
-                         │  logs     ──► Loki      (loki.write)       │
+                         │  logs     ──► Loki   (loki.source.docker)  │
                          └──────┬──────────┬──────────┬───────────────┘
                                 └─────  Grafana  ─────┘  ← 대시보드 / Explore
 ```
 
 - **frontend → ai-service**: 브라우저는 frontend만 호출합니다. `POST /api/chat`이 ai-service의 `POST /chat/stream`(SSE)을 릴레이합니다. (CORS 불필요)
 - **ai-service(관찰 대상)**: `langchain.agents.create_agent`를 기본 설정 그대로 사용 (tools=[], middleware 없음). OpenAI 호환 `ChatOpenAI`만 지원. 채팅 히스토리/메모리 store는 **SQLite**.
-- **ai-service → Alloy**: **커스텀 스팬 없이** `opentelemetry-instrument` CLI가 자동 구성하는 `LangchainInstrumentor`(OpenLLMetry, LangChain 실행) + `FastAPIInstrumentor`(HTTP 레이어) 계측과 Python 로그를 OTel로 전송. 메트릭은 Alloy가 트레이스를 보고 파생 생성하는 spanmetrics(`langchain_calls_total` 등). 코드에는 SDK 설정이 없고, 수집기/계측 설정은 전부 env로 제어(§ ai-service 텔레메트리 env 참고).
-- **Alloy → 백엔드**: Traces→Tempo, metrics→Prometheus(remote write), logs→Loki(로그에 `traceid`/`spanid` 포함 → 트레이스 상관분석 가능).
+- **ai-service → Alloy**: **커스텀 스팬 없이** `opentelemetry-instrument` CLI가 자동 구성하는 `LangchainInstrumentor`(OpenLLMetry, LangChain 실행) + `FastAPIInstrumentor`(HTTP 레이어) **트레이스**를 OTLP로 전송. 메트릭은 Alloy가 트레이스를 보고 파생 생성하는 spanmetrics(`langchain_calls_total` 등). 코드에는 SDK 설정이 없고, 수집기/계측 설정은 전부 env로 제어(§ ai-service 텔레메트리 env 참고).
+- **로그는 OTLP가 아니라 컨테이너 stdout**입니다: 앱은 로그를 그냥 stdout으로 출력하고(= `docker logs` 내용), Alloy의 `loki.source.docker`가 Docker API로 읽어 Loki에 push합니다. stdout 라인에 `traceID`/`spanID`가 주입되므로 Loki↔Tempo 상관분석은 그대로 가능. 쿠버네티스에 배포하면 같은 파이프라인에서 `loki.source.kubernetes`로만 교체하면 `kubectl logs` 내용이 동일하게 Loki로 들어옵니다.
+- **Alloy → 백엔드**: Traces→Tempo, metrics→Prometheus(remote write), logs→Loki(컨테이너 stdout — Docker API 수집).
 
 ## 구성 요소
 
@@ -128,7 +129,7 @@ curl -N -X POST http://localhost:8000/chat/stream \
 
 ## ai-service 텔레메트리 설정 (env)
 
-프로바이더(트레이스/메트릭/로그)와 자동 계측(fastapi/langchain)은 Dockerfile의
+프로바이더(트레이스/메트릭)와 자동 계측(fastapi/langchain)은 Dockerfile의
 `opentelemetry-instrument uvicorn main:app ...` CLI가 `OTEL_*` env로 구성합니다.
 `docker-compose.yml`의 `ai-service.environment`에서 제어합니다:
 
@@ -136,13 +137,14 @@ curl -N -X POST http://localhost:8000/chat/stream \
 |---|---|---|
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `http://localhost:4317` | Alloy 수집기 주소 (compose에서 `http://alloy:4317`) |
 | `OTEL_EXPORTER_OTLP_PROTOCOL` | `grpc` (distro 기본) | 전송 프로토콜 |
-| `OTEL_SERVICE_NAME` | (설정 필수) | 리소스 `service.name` — Tempo/Prometheus/Loki 식별 키 |
+| `OTEL_SERVICE_NAME` | (설정 필수) | 리소스 `service.name` — Tempo/Prometheus 식별 키 (Loki는 아래 로그 경로 참고) |
 | `OTEL_RESOURCE_ATTRIBUTES` | (없음) | 리소스 추가 속성 `k1=v1,k2=v2` (compose에서 `deployment.environment=dev,service.version=0.1.0`) |
 | `TRACELOOP_TRACE_CONTENT` | `true` | OpenLLMetry(LangChain)가 프롬프트/응답 콘텐츠를 스팬에 캡처할지 — 인스트루먼터가 직접 읽음 |
-| `OTEL_TRACES/METRICS/LOGS_EXPORTER` | `otlp` (distro 기본) | 신호별 exporter (opentelemetry-distro가 자동 setdefault) |
+| `OTEL_TRACES/METRICS_EXPORTER` | `otlp` (distro 기본) | 트레이스/메트릭 exporter (opentelemetry-distro가 자동 setdefault) |
 
-로그만 예외: CLI는 Python logging → OTLP(LoggingHandler)를 붙이지 않으므로,
-`tracing.py`의 `attach_logging()`이 루트/`uvicorn.access` 로거에 핸들러를 부착합니다.
+**로그는 OTLP를 쓰지 않습니다.** 앱은 logging을 그냥 stdout으로 출력하고, Alloy의
+`loki.source.docker`가 `docker logs`와 동일한 내용을 Loki로 수집합니다. `tracing.py`의
+`enrich_console_logging()`이 stdout 라인에 `traceID`/`spanID`를 주입해 로그↔트레이스 상관을 만듭니다.
 
 > 주의: CLI가 env 기반 SDK를 구성하려면 **`opentelemetry-distro`(configurator entry point)가
 > 설치되어 있어야** 합니다. 없으면 프로바이더가 `ProxyTracerProvider`로 남아 스팬이 전혀
@@ -167,7 +169,7 @@ curl -N -X POST http://localhost:8000/chat/stream \
     ├── ai-service/             # LangChain agent + SSE + OTel(tracing.py)
     │   ├── main.py             #   POST /chat/stream (SSE)
     │   ├── agent.py            #   create_agent + SQLite checkpoint/store
-    │   ├── tracing.py          #   CLI가 구성한 로거에 LoggingHandler 부착 전용
+    │   ├── tracing.py          #   stdout 로그에 traceID/spanID 주입 (Loki↔Tempo 상관)
     │   └── schemas.py
     └── frontend/               # 채팅 UI + SQLite DB + SSE 릴레이
         ├── main.py             #   /api/{models,active-model,sessions,chat} + 정적 UI

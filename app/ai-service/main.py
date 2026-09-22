@@ -15,8 +15,12 @@ SSE 이벤트:
 트레이스: 커스텀 스팬 없음. LangChain(LangchainInstrumentor) + FastAPI(FastAPIInstrumentor)
 자동 계측만 사용하며, 둘 다 `opentelemetry-instrument uvicorn ...` CLI가 entry point로
 활성화합니다 (Dockerfile CMD). CLI가 OTEL_* env로 프로바이더까지 구성하므로 코드에는
-SDK 설정이 없습니다. 로그만 예외 — tracing.attach_logging()이 Python logging을 OTLP로
-보냅니다 (trace_id/span_id 자동 첨부).
+SDK 설정이 없습니다.
+
+로그: SDK(OTLP)를 쓰지 않고 **그냥 stdout으로 출력**합니다. Alloy의
+loki.source.docker가 docker logs와 동일한 내용을 Loki로 수집합니다(쿠버네티스에서는
+loki.source.kubernetes → kubectl logs 동일). tracing.enrich_console_logging()이
+stdout 라인에 traceID/spanID를 주입해 로그→트레이스 상관관계를 만들어 줍니다.
 """
 import json
 import logging
@@ -25,8 +29,6 @@ import uuid
 from contextlib import asynccontextmanager
 
 import tracing
-
-tracing.attach_logging()
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -59,6 +61,9 @@ def _msg_to_dict(msg) -> dict:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # uvicorn이 로깅을 구성한 뒤의 시점 — stdout 포맷에 traceID/spanID 주입.
+    # (docker logs 텍스트 == Loki 수집 텍스트를 맞추기 위해 색상도 제거)
+    tracing.enrich_console_logging()
     async with (
         AsyncSqliteSaver.from_conn_string(CHECKPOINT_DB) as saver,
         AsyncSqliteStore.from_conn_string(STORE_DB) as store,
