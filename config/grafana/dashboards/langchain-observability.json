@@ -347,7 +347,7 @@
         }
       ],
       "title": "트레이스 스캐터 (점 클릭 → 워터폴·플로우)",
-      "type": "xy"
+      "type": "xychart"
     },
     {
       "datasource": { "type": "prometheus", "uid": "prometheus" },
