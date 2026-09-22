@@ -151,16 +151,17 @@ services:
   # ai-service - LangChain agent + SSE 스트리밍 API (프로필 "apps")
   # - langchain.agents.create_agent (tools=[], middleware 없음, OpenAI 호환 모델만)
   # - checkpoint/store 모두 SQLite (ai-service-data 볼륨)
-  # - 트레이스: 커스텀 스팬 없음. LangChain(LangchainInstrumentor) + FastAPI(FastAPIInstrumentor)
-  #   자동 계측만 OTLP로 전송. 수집기/계측 설정은 아래 environment(env)로 제어
+  # - 프로바이더/자동 계측은 Dockerfile의 `opentelemetry-instrument` CLI가 env로 구성
+  #   (LangChain + FastAPI 모두. 코드에 SDK 설정 없음 — 로그 배선만 tracing.attach_logging)
   # ------------------------------------------------------------------
   ai-service:
     build: ./app/ai-service
     profiles: ["apps"]
     container_name: obs-ai-service
     environment:
-      # --- Alloy 수집기 연결 (OTLP gRPC) ---
+      # --- Alloy 수집기 연결 (opentelemetry-instrument CLI가 env로 프로바이더 구성) ---
       - OTEL_EXPORTER_OTLP_ENDPOINT=http://alloy:4317
+      - OTEL_EXPORTER_OTLP_PROTOCOL=grpc
       - OTEL_SERVICE_NAME=ai-service
       - OTEL_RESOURCE_ATTRIBUTES=deployment.environment=dev,service.version=0.1.0
       # --- LangChain(OpenLLMetry) 자동 계측 ---

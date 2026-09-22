@@ -12,9 +12,11 @@ SSE 이벤트:
   event: error     {message}
   event: done      {thread_id, run_id, content}   — 완성된 전체 답변
 
-트레이스: 커스텀 스팬 없음. LangChain(LangchainInstrumentor) + FastAPI HTTP(FastAPIInstrumentor)
-자동 계측만 사용합니다. instrument_app이 POST /chat/stream 요청 하나를 루트 스팬으로 만들고
-그 아래에 LangChain 실행 스팬들이 중첩됩니다.
+트레이스: 커스텀 스팬 없음. LangChain(LangchainInstrumentor) + FastAPI(FastAPIInstrumentor)
+자동 계측만 사용하며, 둘 다 `opentelemetry-instrument uvicorn ...` CLI가 entry point로
+활성화합니다 (Dockerfile CMD). CLI가 OTEL_* env로 프로바이더까지 구성하므로 코드에는
+SDK 설정이 없습니다. 로그만 예외 — tracing.attach_logging()이 Python logging을 OTLP로
+보냅니다 (trace_id/span_id 자동 첨부).
 """
 import json
 import logging
@@ -24,14 +26,13 @@ from contextlib import asynccontextmanager
 
 import tracing
 
-tracing.setup_otel()  # LangChain 자동 계측을 최초로 활성화 (임포트 순서 중요)
+tracing.attach_logging()
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
 from langgraph.store.sqlite.aio import AsyncSqliteStore
-from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
 from agent import build_agent, build_model
 from schemas import ChatRequest
@@ -66,8 +67,6 @@ async def lifespan(app: FastAPI):
         app.state.store = store
         log.info("persistence ready: checkpoint=%s store=%s", CHECKPOINT_DB, STORE_DB)
         yield
-    tracing.shutdown_otel()
-    log.info("otel shutdown complete")
 
 
 app = FastAPI(title="ai-service", lifespan=lifespan)
@@ -75,9 +74,7 @@ app = FastAPI(title="ai-service", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"]
 )
-# FastAPI HTTP 레이어 계측: 요청 1건 → HTTP 루트 스팬, 내부 LangChain 스팬과 부모-자식 연결.
-# setup_otel() 이후에 호출해야 TracerProvider가 이미 설정된 상태가 됩니다.
-FastAPIInstrumentor().instrument_app(app)
+# FastAPI 계측은 CLI가 FastAPI 클래스를 래핑해 자동 적용 (instrument_app 호출 불필요)
 
 
 @app.get("/health")
